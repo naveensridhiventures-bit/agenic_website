@@ -72,7 +72,7 @@ async function act(a,i){
   <div style="display:flex;gap:10px;margin-top:22px"><button class="btn pri" id="sv">Save product</button><button class="btn ghost" id="cx">Cancel</button></div>`);
   $('#cx').onclick=close;
   $('#sv').onclick=async()=>{const body={id:p.id,name:$('#n').value,category:$('#c').value,tagline:$('#tg').value,description:$('#d').value,vendorId:$('#v').value,emoji:$('#e').value,highlights:$('#h').value,ingredients:$('#ing').value,storage:$('#st').value,howToUse:$('#hu').value,shelfLife:$('#sl').value,pack:$('#pk').value,mrp:$('#mrp').value,fssai:$('#fs').value,batchNote:$('#bn').value,featured:$('#ft').checked,removeImage:$('#ri')?.checked};
-   const file=$('#img').files[0];if(file){if(file.size>5e6)return toast('Image too large (max 5MB)');body.imageData=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(fr.result);fr.readAsDataURL(file)})}
+   const file=$('#img').files[0];if(file){if(file.size>5e6)return toast('Image too large (max 5MB)');body.imageData=await shrink(file)}
    try{await api('/api/admin/products',{method:'POST',body});toast('Saved ✔');close();load()}catch(e){toast(e.message)}};return}
  if(a=='newv'||a=='editv'){const v=db.vendors.find(x=>x.id==i)||{};
   modal(`<h2 style="color:var(--g8)">${i?'Edit':'Add'} vendor</h2>${f('vn','Vendor name *',v.name)}${f('va','Address',v.address,'textarea')}
@@ -81,5 +81,6 @@ async function act(a,i){
   $('#cx').onclick=close;
   $('#sv').onclick=async()=>{try{await api('/api/admin/vendors',{method:'POST',body:{id:v.id,name:$('#vn').value,address:$('#va').value,fssai:$('#vf').value,established:$('#ve').value,incorporated:$('#vi').value,phone:$('#vp').value,email:$('#vm').value,about:$('#vb').value}});toast('Saved ✔');close();load()}catch(e){toast(e.message)}}}
 }
+const shrink=f=>new Promise((res,rej)=>{const im=new Image();im.onload=()=>{const m=900,k=Math.min(1,m/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=im.width*k;c.height=im.height*k;c.getContext('2d').drawImage(im,0,0,c.width,c.height);res(c.toDataURL('image/jpeg',.82))};im.onerror=rej;im.src=URL.createObjectURL(f)});
 token?load():render();
 </script></body></html>

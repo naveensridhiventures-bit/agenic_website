@@ -1,0 +1,9 @@
+{
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index.js" },
+    { "source": "/uploads/(.*)", "destination": "/api/index.js" },
+    { "source": "/p/:id", "destination": "/product.html" },
+    { "source": "/agenic-admin", "destination": "/admin.html" }
+  ],
+  "functions": { "api/index.js": { "includeFiles": "public/**" } }
+}

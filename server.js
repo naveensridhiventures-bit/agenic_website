@@ -9,9 +9,8 @@ const PORT = process.env.PORT || 3000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'agenic@2026';
 const ADMIN_PATH = process.env.ADMIN_PATH || '/agenic-admin'; // hidden admin URL
 const DATA_DIR = path.join(__dirname, 'data');
-const DB_FILE = path.join(DATA_DIR, 'db.json');
-const UPLOADS = path.join(DATA_DIR, 'uploads');
-fs.mkdirSync(UPLOADS, { recursive: true });
+const KV_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+const KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
 
 const seed = {
   vendors: [{
@@ -46,72 +45,99 @@ const seed = {
     featured: true
   }]
 };
-if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, JSON.stringify(seed, null, 2));
-const load = () => JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-const save = (d) => fs.writeFileSync(DB_FILE, JSON.stringify(d, null, 2));
+
+// ---------- storage: Upstash/Vercel KV when configured, else local files (/tmp on read-only hosts) ----------
+async function kv(cmd) {
+  const r = await fetch(KV_URL, { method: 'POST', headers: { Authorization: 'Bearer ' + KV_TOKEN, 'Content-Type': 'application/json' }, body: JSON.stringify(cmd) });
+  const j = await r.json();
+  if (j.error) throw new Error(j.error);
+  return j.result;
+}
+let LOCAL = DATA_DIR;
+try { fs.mkdirSync(path.join(DATA_DIR, 'uploads'), { recursive: true }); fs.accessSync(DATA_DIR, fs.constants.W_OK); }
+catch { LOCAL = '/tmp/agenic-data'; fs.mkdirSync(path.join(LOCAL, 'uploads'), { recursive: true }); }
+const DB_FILE = path.join(LOCAL, 'db.json');
+const store = {
+  async load() {
+    if (KV_URL) { const v = await kv(['GET', 'agenic:db']); if (v) return JSON.parse(v); await kv(['SET', 'agenic:db', JSON.stringify(seed)]); return JSON.parse(JSON.stringify(seed)); }
+    if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, JSON.stringify(seed, null, 2));
+    return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+  },
+  async save(d) { if (KV_URL) return kv(['SET', 'agenic:db', JSON.stringify(d)]); fs.writeFileSync(DB_FILE, JSON.stringify(d, null, 2)); },
+  async putImage(name, buf, mime) {
+    if (KV_URL) return kv(['SET', 'agenic:img:' + name, mime + '|' + buf.toString('base64')]);
+    fs.writeFileSync(path.join(LOCAL, 'uploads', name), buf);
+  },
+  async getImage(name) {
+    if (KV_URL) { const v = await kv(['GET', 'agenic:img:' + name]); if (!v) return null; const i = v.indexOf('|'); return { mime: v.slice(0, i), buf: Buffer.from(v.slice(i + 1), 'base64') }; }
+    const f = path.join(LOCAL, 'uploads', name);
+    if (!fs.existsSync(f)) return null;
+    return { mime: 'image/' + (name.endsWith('png') ? 'png' : name.endsWith('webp') ? 'webp' : 'jpeg'), buf: fs.readFileSync(f) };
+  }
+};
+const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(e => { console.error(e); res.status(500).json({ error: 'Server error: ' + e.message }); });
+
 const slug = (s) => String(s).toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
-app.use(express.json({ limit: '8mb' }));
-app.use('/uploads', express.static(UPLOADS, { maxAge: '7d' }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.set('trust proxy', true);
+app.use(express.json({ limit: '6mb' }));
 
-// ---------- auth ----------
-const sessions = new Set();
-const auth = (req, res, next) => {
-  const t = (req.headers.authorization || '').replace('Bearer ', '');
-  if (sessions.has(t)) return next();
-  res.status(401).json({ error: 'Unauthorized' });
-};
-let fails = {};
+// ---------- auth (stateless signed token: works on serverless) ----------
+const sign = (p) => crypto.createHmac('sha256', ADMIN_PASSWORD + '|agenic').update(p).digest('hex');
+const makeToken = () => { const exp = Date.now() + 12 * 3600 * 1000; return exp + '.' + sign(String(exp)); };
+const validToken = (t) => { const [exp, sig] = String(t || '').split('.'); if (!exp || !sig || Date.now() > +exp) return false; const a = Buffer.from(sig), b = Buffer.from(sign(exp)); return a.length === b.length && crypto.timingSafeEqual(a, b); };
+const auth = (req, res, next) => validToken((req.headers.authorization || '').replace('Bearer ', '')) ? next() : res.status(401).json({ error: 'Unauthorized' });
+const fails = {};
 app.post('/api/admin/login', (req, res) => {
   const ip = req.ip;
   fails[ip] = fails[ip] || { n: 0, t: Date.now() };
   if (fails[ip].n >= 8 && Date.now() - fails[ip].t < 15 * 60 * 1000) return res.status(429).json({ error: 'Too many attempts. Try later.' });
-  const a = Buffer.from(String(req.body.password || ''));
-  const b = Buffer.from(ADMIN_PASSWORD);
-  if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
-    delete fails[ip];
-    const t = crypto.randomBytes(24).toString('hex');
-    sessions.add(t);
-    return res.json({ token: t });
-  }
+  const a = Buffer.from(String(req.body.password || '')), b = Buffer.from(ADMIN_PASSWORD);
+  if (a.length === b.length && crypto.timingSafeEqual(a, b)) { delete fails[ip]; return res.json({ token: makeToken() }); }
   fails[ip].n++; fails[ip].t = Date.now();
   res.status(401).json({ error: 'Wrong password' });
 });
 
+// ---------- uploaded images ----------
+app.get('/uploads/:name', wrap(async (req, res) => {
+  const img = await store.getImage(req.params.name.replace(/[^a-z0-9.]/gi, ''));
+  if (!img) return res.status(404).end();
+  res.set('Cache-Control', 'public, max-age=604800').type(img.mime).send(img.buf);
+}));
+
 // ---------- public API ----------
-app.get('/api/products', (req, res) => {
-  const d = load();
+app.get('/api/products', wrap(async (req, res) => {
+  const d = await store.load();
   res.json(d.products.map(p => ({ ...p, vendor: d.vendors.find(v => v.id === p.vendorId) || null })));
-});
-app.get('/api/products/:id', (req, res) => {
-  const d = load();
+}));
+app.get('/api/products/:id', wrap(async (req, res) => {
+  const d = await store.load();
   const p = d.products.find(x => x.id === req.params.id);
   if (!p) return res.status(404).json({ error: 'Not found' });
   res.json({ ...p, vendor: d.vendors.find(v => v.id === p.vendorId) || null });
-});
+}));
 
 // ---------- admin API ----------
-app.get('/api/admin/data', auth, (req, res) => res.json(load()));
+app.get('/api/admin/data', auth, wrap(async (req, res) => res.json(await store.load())));
 
-function saveImage(dataUrl) {
+async function saveImage(dataUrl) {
   const m = /^data:image\/(png|jpe?g|webp);base64,(.+)$/.exec(dataUrl || '');
   if (!m) return null;
   const ext = m[1] === 'jpeg' ? 'jpg' : m[1];
   const name = crypto.randomBytes(8).toString('hex') + '.' + ext;
-  fs.writeFileSync(path.join(UPLOADS, name), Buffer.from(m[2], 'base64'));
+  await store.putImage(name, Buffer.from(m[2], 'base64'), 'image/' + (ext === 'jpg' ? 'jpeg' : ext));
   return '/uploads/' + name;
 }
 const arr = (v) => Array.isArray(v) ? v.map(String).map(s => s.trim()).filter(Boolean) : String(v || '').split('\n').map(s => s.trim()).filter(Boolean);
 const str = (v, n = 2000) => String(v || '').slice(0, n);
 
-app.post('/api/admin/products', auth, (req, res) => {
-  const d = load(); const b = req.body;
+app.post('/api/admin/products', auth, wrap(async (req, res) => {
+  const d = await store.load(); const b = req.body;
   if (!b.name) return res.status(400).json({ error: 'Name required' });
   const existing = b.id && d.products.find(p => p.id === b.id);
   const id = existing ? existing.id : (slug(b.name) + (d.products.some(p => p.id === slug(b.name)) ? '-' + Date.now().toString(36) : ''));
   let image = existing ? existing.image : '';
-  if (b.imageData) image = saveImage(b.imageData) || image;
+  if (b.imageData) image = (await saveImage(b.imageData)) || image;
   if (b.removeImage) image = '';
   const p = {
     id, name: str(b.name, 120), tagline: str(b.tagline, 200), category: str(b.category, 60) || 'General',
@@ -121,46 +147,44 @@ app.post('/api/admin/products', auth, (req, res) => {
     mrp: str(b.mrp, 40), batchNote: str(b.batchNote, 200), fssai: str(b.fssai, 30), featured: !!b.featured
   };
   if (existing) d.products[d.products.indexOf(existing)] = p; else d.products.push(p);
-  save(d); res.json(p);
-});
-app.delete('/api/admin/products/:id', auth, (req, res) => {
-  const d = load(); d.products = d.products.filter(p => p.id !== req.params.id); save(d); res.json({ ok: true });
-});
-app.post('/api/admin/vendors', auth, (req, res) => {
-  const d = load(); const b = req.body;
+  await store.save(d); res.json(p);
+}));
+app.delete('/api/admin/products/:id', auth, wrap(async (req, res) => {
+  const d = await store.load(); d.products = d.products.filter(p => p.id !== req.params.id); await store.save(d); res.json({ ok: true });
+}));
+app.post('/api/admin/vendors', auth, wrap(async (req, res) => {
+  const d = await store.load(); const b = req.body;
   if (!b.name) return res.status(400).json({ error: 'Name required' });
   const existing = b.id && d.vendors.find(v => v.id === b.id);
   const id = existing ? existing.id : (slug(b.name) + (d.vendors.some(v => v.id === slug(b.name)) ? '-' + Date.now().toString(36) : ''));
   const v = { id, name: str(b.name, 150), established: str(b.established, 20), incorporated: str(b.incorporated, 100), address: str(b.address, 400), fssai: str(b.fssai, 30), phone: str(b.phone, 30), email: str(b.email, 100), about: str(b.about) };
   if (existing) d.vendors[d.vendors.indexOf(existing)] = v; else d.vendors.push(v);
-  save(d); res.json(v);
-});
-app.delete('/api/admin/vendors/:id', auth, (req, res) => {
-  const d = load();
+  await store.save(d); res.json(v);
+}));
+app.delete('/api/admin/vendors/:id', auth, wrap(async (req, res) => {
+  const d = await store.load();
   if (d.products.some(p => p.vendorId === req.params.id)) return res.status(400).json({ error: 'Vendor has products. Reassign or delete them first.' });
-  d.vendors = d.vendors.filter(v => v.id !== req.params.id); save(d); res.json({ ok: true });
-});
+  d.vendors = d.vendors.filter(v => v.id !== req.params.id); await store.save(d); res.json({ ok: true });
+}));
 
 // ---------- QR ----------
 const baseUrl = (req) => (process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
-app.get('/api/qr/:id.:fmt', async (req, res) => {
-  const d = load();
+app.get('/api/qr/:id.:fmt', wrap(async (req, res) => {
+  const d = await store.load();
   if (!d.products.some(p => p.id === req.params.id)) return res.status(404).end();
   const url = `${baseUrl(req)}/p/${req.params.id}`;
   const opts = { errorCorrectionLevel: 'H', margin: 2, color: { dark: '#0b4f1a', light: '#ffffff' }, width: 1024 };
-  try {
-    if (req.params.fmt === 'svg') { res.type('svg').send(await QRCode.toString(url, { ...opts, type: 'svg' })); }
-    else {
-      const buf = await QRCode.toBuffer(url, opts);
-      if (req.query.download) res.set('Content-Disposition', `attachment; filename="agenic-${req.params.id}-qr.png"`);
-      res.type('png').send(buf);
-    }
-  } catch (e) { res.status(500).end(); }
-});
+  if (req.params.fmt === 'svg') return res.type('svg').send(await QRCode.toString(url, { ...opts, type: 'svg' }));
+  const buf = await QRCode.toBuffer(url, opts);
+  if (req.query.download) res.set('Content-Disposition', `attachment; filename="agenic-${req.params.id}-qr.png"`);
+  res.type('png').send(buf);
+}));
 app.get('/api/qr-url/:id', (req, res) => res.json({ url: `${baseUrl(req)}/p/${req.params.id}` }));
 
-// ---------- pages ----------
+// ---------- pages (local run; on Vercel these are handled by rewrites in vercel.json) ----------
+app.use(express.static(path.join(__dirname, 'public')));
 app.get('/p/:id', (req, res) => res.sendFile(path.join(__dirname, 'public/product.html')));
 app.get(ADMIN_PATH, (req, res) => { res.set('X-Robots-Tag', 'noindex'); res.sendFile(path.join(__dirname, 'public/admin.html')); });
 
-app.listen(PORT, () => console.log(`Agenic site running on http://localhost:${PORT}  (admin: ${ADMIN_PATH})`));
+module.exports = app;
+if (require.main === module) app.listen(PORT, () => console.log(`Agenic site running on http://localhost:${PORT}  (admin: ${ADMIN_PATH})`));
