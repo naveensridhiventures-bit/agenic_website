@@ -213,9 +213,9 @@ app.get('/api/qr-site-url', (req, res) => res.json({ url: baseUrl(req) + '/' }))
 app.get('/api/qr-url/:id', (req, res) => res.json({ url: `${baseUrl(req)}/p/${req.params.id}` }));
 
 // ---------- pages (local run; on Vercel these are handled by rewrites in vercel.json) ----------
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 app.get('/p/:id', (req, res) => res.sendFile(path.join(__dirname, 'public/product.html')));
-app.get(ADMIN_PATH, (req, res) => { res.set('X-Robots-Tag', 'noindex'); res.sendFile(path.join(__dirname, 'public/admin.html')); });
+app.get(ADMIN_PATH, (req, res) => { res.set('X-Robots-Tag', 'noindex'); res.sendFile(path.join(__dirname, 'views/admin.html')); });
 
 module.exports = app;
 if (require.main === module) app.listen(PORT, () => console.log(`Agenic site running on http://localhost:${PORT}  (admin: ${ADMIN_PATH})`));

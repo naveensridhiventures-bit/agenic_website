@@ -1,9 +1,10 @@
 {
+  "cleanUrls": true,
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index.js" },
     { "source": "/uploads/(.*)", "destination": "/api/index.js" },
-    { "source": "/p/:id", "destination": "/product.html" },
-    { "source": "/agenic-admin", "destination": "/admin.html" }
+    { "source": "/agenic-admin", "destination": "/api/index.js" },
+    { "source": "/p/:id", "destination": "/product" }
   ],
-  "functions": { "api/index.js": { "includeFiles": "public/**" } }
+  "functions": { "api/index.js": { "includeFiles": "{public,views}/**" } }
 }
