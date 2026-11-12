@@ -11,8 +11,11 @@ $('#tk').innerHTML=[...words,...words,...words,...words].map(w=>`<span>${w}</spa
 // nav behaviour + progress + parallax
 const nav=$('#nav'),prog=$('#prog');let lastY=0;
 addEventListener('scroll',()=>{const y=scrollY;nav.classList.toggle('s',y>30);nav.classList.toggle('h',y>lastY&&y>500&&!$('#menu').classList.contains('open'));lastY=y;prog.style.transform=`scaleX(${y/(document.body.scrollHeight-innerHeight)})`;if(!reduce)$('#stage').style.setProperty('--py',y*-.06+'px')},{passive:true});
-$('#burger').onclick=()=>$('#menu').classList.toggle('open');
-$$('#menu a').forEach(a=>a.onclick=()=>$('#menu').classList.remove('open'));
+const setMenu=o=>{$('#menu').classList.toggle('open',o);document.body.classList.toggle('menu-open',o);const b=$('#burger');b.setAttribute('aria-expanded',o);b.setAttribute('aria-label',o?'Close menu':'Open menu');b.innerHTML=ic(o?'x':'menu')};
+$('#burger').onclick=()=>setMenu(!$('#menu').classList.contains('open'));
+$$('#menu a').forEach(a=>a.addEventListener('click',()=>setMenu(false)));
+addEventListener('keydown',e=>{if(e.key==='Escape')setMenu(false)});
+matchMedia('(min-width:761px)').addEventListener('change',e=>{if(e.matches)setMenu(false)});
 // active link
 const secs=$$('section[id]');const lio=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting)$$('#menu a').forEach(a=>a.classList.toggle('on',a.getAttribute('href')==='#'+e.target.id))}),{rootMargin:'-45% 0px -50% 0px'});secs.forEach(s=>lio.observe(s));
 // reveal
@@ -39,3 +42,15 @@ $$('[data-type]').forEach(a=>a.addEventListener('click',()=>{$('#e_type').value=
 // enquiry
 $('#enq').onsubmit=async e=>{e.preventDefault();const n=$('#enote'),b=e.target.querySelector('button');b.disabled=true;n.style.color='';n.textContent='Sending...';
  try{const r=await fetch('/api/enquiry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('#e_name').value,org:$('#e_org').value,phone:$('#e_phone').value,email:$('#e_mail').value,type:$('#e_type').value,message:$('#e_msg').value})});if(!r.ok)throw 0;e.target.reset();n.textContent='Thank you. Your enquiry has been received and our team will contact you shortly.'}catch{n.style.color='#b3261e';n.textContent='Could not send right now. Please try again in a moment.'}b.disabled=false};
+
+// ---- mobile: carousel dots ----
+(function(){
+ const setup=()=>{document.querySelectorAll('.hs').forEach(hs=>{
+   if(hs.dataset.dots||hs.children.length<2||getComputedStyle(hs).display==='none')return;hs.dataset.dots=1;
+   const d=document.createElement('div');d.className='dots';hs.after(d);
+   const upd=()=>{const n=hs.children.length;d.innerHTML=Array.from({length:n},()=>'<i></i>').join('');const i=Math.round(hs.scrollLeft/(hs.scrollWidth-hs.clientWidth||1)*(n-1));[...d.children].forEach((x,k)=>x.classList.toggle('on',k===i))};
+   upd();hs.addEventListener('scroll',()=>requestAnimationFrame(upd),{passive:true});
+   new MutationObserver(upd).observe(hs,{childList:true});
+ })};
+ setup();setTimeout(setup,1200);setTimeout(setup,3000);
+})();

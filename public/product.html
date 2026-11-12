@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Agenic | Product details</title><link rel="icon" href="/img/logo.png"><meta name="theme-color" content="#0a4a18">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400;1,9..144,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/css/style.css">
@@ -26,7 +26,7 @@ fetch('/api/products/'+encodeURIComponent(id)).then(r=>{if(!r.ok)throw 0;return 
    <div class="chips">${(p.highlights||[]).map(h=>`<span>${ic('check')}${esc(h)}</span>`).join('')}</div>
    <div class="spec">${spec.map(([k,val])=>`<div><small>${k}</small><b>${esc(val)}</b></div>`).join('')}</div></div>
  </section>
- <div class="det">
+ <div class="det hs">
   ${p.ingredients?`<div class="dc rv"><h3>${ic('leaf')}Ingredients</h3><p>${esc(p.ingredients)}</p></div>`:''}
   ${p.storage?`<div class="dc rv" style="--d:1"><h3>${ic('thermo')}Storage &amp; handling</h3><p>${esc(p.storage)}</p></div>`:''}
   ${(p.howToUse||[]).length?`<div class="dc rv" style="--d:2"><h3>${ic('utensils')}How to use</h3><ol>${p.howToUse.map(s=>`<li>${esc(s)}</li>`).join('')}</ol></div>`:''}
