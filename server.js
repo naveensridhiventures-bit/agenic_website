@@ -76,6 +76,7 @@ const store = {
     return { mime: 'image/' + (name.endsWith('png') ? 'png' : name.endsWith('webp') ? 'webp' : 'jpeg'), buf: fs.readFileSync(f) };
   }
 };
+const withLogo = v => v ? { ...v, logo: v.logo || (v.id === 'sridhi-ventures' ? '/img/sridhi.png' : '') } : v;
 const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(e => { console.error(e); res.status(500).json({ error: 'Server error: ' + e.message }); });
 
 const slug = (s) => String(s).toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -109,18 +110,18 @@ app.get('/uploads/:name', wrap(async (req, res) => {
 // ---------- public API ----------
 app.get('/api/products', wrap(async (req, res) => {
   const d = await store.load();
-  res.json(d.products.map(p => ({ ...p, vendor: d.vendors.find(v => v.id === p.vendorId) || null })));
+  res.json(d.products.map(p => ({ ...p, vendor: withLogo(d.vendors.find(v => v.id === p.vendorId)) || null })));
 }));
 app.get('/api/products/:id', wrap(async (req, res) => {
   const d = await store.load();
   const p = d.products.find(x => x.id === req.params.id);
   if (!p) return res.status(404).json({ error: 'Not found' });
-  res.json({ ...p, vendor: d.vendors.find(v => v.id === p.vendorId) || null });
+  res.json({ ...p, vendor: withLogo(d.vendors.find(v => v.id === p.vendorId)) || null });
 }));
 
 app.get('/api/vendors', wrap(async (req, res) => {
   const d = await store.load();
-  res.json(d.vendors.map(({ id, name, established, incorporated, address, fssai, phone, email, about }) => ({ id, name, established, incorporated, address, fssai, phone, email, about })));
+  res.json(d.vendors.map(withLogo).map(({ id, name, established, incorporated, address, fssai, phone, email, about, logo }) => ({ id, name, established, incorporated, address, fssai, phone, email, about, logo })));
 }));
 const enqHits = {};
 app.post('/api/enquiry', wrap(async (req, res) => {
@@ -175,7 +176,10 @@ app.post('/api/admin/vendors', auth, wrap(async (req, res) => {
   if (!b.name) return res.status(400).json({ error: 'Name required' });
   const existing = b.id && d.vendors.find(v => v.id === b.id);
   const id = existing ? existing.id : (slug(b.name) + (d.vendors.some(v => v.id === slug(b.name)) ? '-' + Date.now().toString(36) : ''));
-  const v = { id, name: str(b.name, 150), established: str(b.established, 20), incorporated: str(b.incorporated, 100), address: str(b.address, 400), fssai: str(b.fssai, 30), phone: str(b.phone, 30), email: str(b.email, 100), about: str(b.about) };
+  let logo = existing ? (existing.logo || '') : '';
+  if (b.imageData) logo = (await saveImage(b.imageData)) || logo;
+  if (b.removeImage) logo = '';
+  const v = { id, logo, name: str(b.name, 150), established: str(b.established, 20), incorporated: str(b.incorporated, 100), address: str(b.address, 400), fssai: str(b.fssai, 30), phone: str(b.phone, 30), email: str(b.email, 100), about: str(b.about) };
   if (existing) d.vendors[d.vendors.indexOf(existing)] = v; else d.vendors.push(v);
   await store.save(d); res.json(v);
 }));
@@ -197,6 +201,15 @@ app.get('/api/qr/:id.:fmt', wrap(async (req, res) => {
   if (req.query.download) res.set('Content-Disposition', `attachment; filename="agenic-${req.params.id}-qr.png"`);
   res.type('png').send(buf);
 }));
+app.get('/api/qr-site.:fmt', wrap(async (req, res) => {
+  const url = baseUrl(req) + '/';
+  const opts = { errorCorrectionLevel: 'H', margin: 2, color: { dark: '#0a4a18', light: '#ffffff' }, width: 1024 };
+  if (req.params.fmt === 'svg') return res.type('svg').send(await QRCode.toString(url, { ...opts, type: 'svg' }));
+  const buf = await QRCode.toBuffer(url, opts);
+  if (req.query.download) res.set('Content-Disposition', 'attachment; filename="agenic-website-qr.png"');
+  res.type('png').send(buf);
+}));
+app.get('/api/qr-site-url', (req, res) => res.json({ url: baseUrl(req) + '/' }));
 app.get('/api/qr-url/:id', (req, res) => res.json({ url: `${baseUrl(req)}/p/${req.params.id}` }));
 
 // ---------- pages (local run; on Vercel these are handled by rewrites in vercel.json) ----------
