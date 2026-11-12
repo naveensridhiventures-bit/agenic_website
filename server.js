@@ -30,7 +30,6 @@ const seed = {
     tagline: 'Fresh stone-ground goodness, ready to pour.',
     category: 'Batters',
     vendorId: 'sridhi-ventures',
-    emoji: '🥞',
     image: '',
     description: 'Freshly prepared idli & dosa batter made from carefully selected rice and urad dal, ground to the perfect consistency for soft, fluffy idlis and crisp golden dosas. No shortcuts — just the traditional taste your family trusts.',
     highlights: ['Freshly made', 'No preservatives*', 'Soft & fluffy idlis', 'Crisp golden dosas', 'Hygienically packed'],
@@ -63,6 +62,8 @@ const store = {
     if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, JSON.stringify(seed, null, 2));
     return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
   },
+  async addEnquiry(e) { if (KV_URL) return kv(['LPUSH', 'agenic:enq', JSON.stringify(e)]); const f = path.join(LOCAL, 'enq.json'); const a = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f)) : []; a.unshift(e); fs.writeFileSync(f, JSON.stringify(a)); },
+  async listEnquiries() { if (KV_URL) return (await kv(['LRANGE', 'agenic:enq', 0, 199])).map(x => JSON.parse(x)); const f = path.join(LOCAL, 'enq.json'); return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f)) : []; },
   async save(d) { if (KV_URL) return kv(['SET', 'agenic:db', JSON.stringify(d)]); fs.writeFileSync(DB_FILE, JSON.stringify(d, null, 2)); },
   async putImage(name, buf, mime) {
     if (KV_URL) return kv(['SET', 'agenic:img:' + name, mime + '|' + buf.toString('base64')]);
@@ -117,6 +118,23 @@ app.get('/api/products/:id', wrap(async (req, res) => {
   res.json({ ...p, vendor: d.vendors.find(v => v.id === p.vendorId) || null });
 }));
 
+app.get('/api/vendors', wrap(async (req, res) => {
+  const d = await store.load();
+  res.json(d.vendors.map(({ id, name, established, incorporated, address, fssai, phone, email, about }) => ({ id, name, established, incorporated, address, fssai, phone, email, about })));
+}));
+const enqHits = {};
+app.post('/api/enquiry', wrap(async (req, res) => {
+  const ip = req.ip, now = Date.now();
+  enqHits[ip] = (enqHits[ip] || []).filter(t => now - t < 3600e3);
+  if (enqHits[ip].length >= 5) return res.status(429).json({ error: 'Too many enquiries. Please try later.' });
+  const b = req.body;
+  if (!b.name || !b.phone || !b.message) return res.status(400).json({ error: 'Name, phone and message are required' });
+  enqHits[ip].push(now);
+  await store.addEnquiry({ at: new Date().toISOString(), name: str(b.name, 100), org: str(b.org, 120), phone: str(b.phone, 30), email: str(b.email, 100), type: str(b.type, 60), message: str(b.message, 1500) });
+  res.json({ ok: true });
+}));
+app.get('/api/admin/enquiries', auth, wrap(async (req, res) => res.json(await store.listEnquiries())));
+
 // ---------- admin API ----------
 app.get('/api/admin/data', auth, wrap(async (req, res) => res.json(await store.load())));
 
@@ -141,7 +159,7 @@ app.post('/api/admin/products', auth, wrap(async (req, res) => {
   if (b.removeImage) image = '';
   const p = {
     id, name: str(b.name, 120), tagline: str(b.tagline, 200), category: str(b.category, 60) || 'General',
-    vendorId: str(b.vendorId, 80), emoji: str(b.emoji, 8) || '🛒', image,
+    vendorId: str(b.vendorId, 80), image,
     description: str(b.description), highlights: arr(b.highlights), ingredients: str(b.ingredients),
     storage: str(b.storage), howToUse: arr(b.howToUse), shelfLife: str(b.shelfLife, 100), pack: str(b.pack, 150),
     mrp: str(b.mrp, 40), batchNote: str(b.batchNote, 200), fssai: str(b.fssai, 30), featured: !!b.featured
